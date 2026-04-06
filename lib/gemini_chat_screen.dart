@@ -1,7 +1,7 @@
 import 'dart:async';
-
 import 'package:cross_cache/cross_cache.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_chat_core/flutter_chat_core.dart'
     hide InMemoryChatController;
@@ -13,7 +13,6 @@ import 'package:google_generative_ai/google_generative_ai.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
-
 import 'gemini_stream_manager.dart';
 import 'in_memory_chat_controller.dart';
 
@@ -21,9 +20,7 @@ const Duration _kChunkAnimationDuration = Duration(milliseconds: 350);
 
 class GeminiChatScreen extends StatefulWidget {
   final String geminiApiKey;
-
   const GeminiChatScreen({super.key, required this.geminiApiKey});
-
   @override
   State<GeminiChatScreen> createState() => _GeminiChatScreenState();
 }
@@ -33,7 +30,6 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
   final _crossCache = CrossCache();
   final _scrollController = ScrollController();
   final _chatController = InMemoryChatController();
-
   final _currentUser = const User(id: 'me');
   final _agent = const User(id: 'agent');
 
@@ -42,12 +38,28 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
   late final GeminiStreamManager _streamManager;
 
   bool _isStreaming = false;
+  bool _isAutoScrollEnabled = true;
+  bool _userScrolledUp = false;
+
   StreamSubscription? _currentStreamSubscription;
   String? _currentStreamId;
 
   @override
   void initState() {
     super.initState();
+
+    _scrollController.addListener(() {
+      if (!_scrollController.hasClients) return;
+
+      if (_isNoBottom) {
+        _userScrolledUp = true;
+        _isAutoScrollEnabled = false;
+      } else if (_isBottom) {
+        _userScrolledUp = false;
+        _isAutoScrollEnabled = true;
+      }
+    });
+
     _streamManager = GeminiStreamManager(
       chatController: _chatController,
       chunkAnimationDuration: _kChunkAnimationDuration,
@@ -78,14 +90,11 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
     if (_currentStreamSubscription != null && _currentStreamId != null) {
       _currentStreamSubscription!.cancel();
       _currentStreamSubscription = null;
-
       setState(() {
         _isStreaming = false;
       });
-
       if (_currentStreamId != null) {
-        _streamManager.errorStream(
-            _currentStreamId!, 'Stream stopped by user');
+        _streamManager.errorStream(_currentStreamId!, 'Stream stopped by user');
         _currentStreamId = null;
       }
     }
@@ -97,11 +106,9 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
     TextStreamMessage? streamMessage,
   ) async {
     debugPrint('Generation error for $streamId: $error');
-
     if (streamMessage != null) {
       await _streamManager.errorStream(streamId, error);
     }
-
     if (mounted) {
       setState(() {
         _isStreaming = false;
@@ -111,10 +118,33 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
     _currentStreamId = null;
   }
 
+  bool get _isBottom {
+    if (!_scrollController.hasClients) return true;
+    return _scrollController.offset >=
+        _scrollController.position.maxScrollExtent - 50;
+  }
+
+  bool get _isNoBottom {
+    if (!_scrollController.hasClients) return false;
+    return _scrollController.position.userScrollDirection ==
+            ScrollDirection.forward &&
+        _scrollController.offset <
+            _scrollController.position.maxScrollExtent - 50;
+  }
+
+  void _scrollToBottom() {
+    if (!_scrollController.hasClients) return;
+    if (_userScrolledUp) return;
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(title: const Text('Gemini Chat')),
       body: ChangeNotifierProvider.value(
@@ -125,78 +155,85 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
               return ChatAnimatedList(
                 scrollController: _scrollController,
                 itemBuilder: itemBuilder,
+                // shouldScrollToEndWhenAtBottom: false,
+                shouldScrollToEndWhenSendingMessage: false,
               );
             },
-            imageMessageBuilder: (
-              context,
-              message,
-              index, {
-              required bool isSentByMe,
-              MessageGroupStatus? groupStatus,
-            }) =>
-                FlyerChatImageMessage(
-              message: message,
-              index: index,
-              showTime: false,
-              showStatus: false,
-            ),
+            imageMessageBuilder:
+                (
+                  context,
+                  message,
+                  index, {
+                  required bool isSentByMe,
+                  MessageGroupStatus? groupStatus,
+                }) => FlyerChatImageMessage(
+                  message: message,
+                  index: index,
+                  showTime: false,
+                  showStatus: false,
+                ),
             composerBuilder: (context) => _Composer(
               isStreaming: _isStreaming,
               onStop: _stopCurrentStream,
             ),
-            textMessageBuilder: (
-              context,
-              message,
-              index, {
-              required bool isSentByMe,
-              MessageGroupStatus? groupStatus,
-            }) =>
-                FlyerChatTextMessage(
-              message: message,
-              index: index,
-              showTime: false,
-              showStatus: false,
-              receivedBackgroundColor: Colors.transparent,
-              padding: message.authorId == _agent.id
-                  ? EdgeInsets.zero
-                  : const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            ),
-            textStreamMessageBuilder: (
-              context,
-              message,
-              index, {
-              required bool isSentByMe,
-              MessageGroupStatus? groupStatus,
-            }) {
-              final streamState = context
-                  .watch<GeminiStreamManager>()
-                  .getState(message.streamId);
-              return FlyerChatTextStreamMessage(
-                message: message,
-                index: index,
-                streamState: streamState,
-                chunkAnimationDuration: _kChunkAnimationDuration,
-                showTime: false,
-                showStatus: false,
-                receivedBackgroundColor: Colors.transparent,
-                padding: message.authorId == _agent.id
-                    ? EdgeInsets.zero
-                    : const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              );
-            },
+            textMessageBuilder:
+                (
+                  context,
+                  message,
+                  index, {
+                  required bool isSentByMe,
+                  MessageGroupStatus? groupStatus,
+                }) => FlyerChatTextMessage(
+                  message: message,
+                  index: index,
+                  showTime: false,
+                  showStatus: false,
+                  receivedBackgroundColor: Colors.transparent,
+                  padding: message.authorId == _agent.id
+                      ? EdgeInsets.zero
+                      : const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                ),
+            textStreamMessageBuilder:
+                (
+                  context,
+                  message,
+                  index, {
+                  required bool isSentByMe,
+                  MessageGroupStatus? groupStatus,
+                }) {
+                  final streamState = context
+                      .watch<GeminiStreamManager>()
+                      .getState(message.streamId);
+                  return FlyerChatTextStreamMessage(
+                    message: message,
+                    index: index,
+                    streamState: streamState,
+                    chunkAnimationDuration: _kChunkAnimationDuration,
+                    showTime: false,
+                    showStatus: false,
+                    receivedBackgroundColor: Colors.transparent,
+                    padding: message.authorId == _agent.id
+                        ? EdgeInsets.zero
+                        : const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                  );
+                },
           ),
           chatController: _chatController,
           crossCache: _crossCache,
           currentUserId: _currentUser.id,
           onAttachmentTap: _handleAttachmentTap,
           onMessageSend: _handleMessageSend,
-          resolveUser: (id) => Future.value(
-            switch (id) {
-              'me' => _currentUser,
-              'agent' => _agent,
-              _ => null,
-            },
-          ),
+          resolveUser: (id) => Future.value(switch (id) {
+            'me' => _currentUser,
+            'agent' => _agent,
+            _ => null,
+          }),
           theme: ChatTheme.fromThemeData(theme),
         ),
       ),
@@ -213,6 +250,12 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
         metadata: isOnlyEmoji(text) ? {'isOnlyEmoji': true} : null,
       ),
     );
+
+    if (_isAutoScrollEnabled && !_userScrolledUp) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_userScrolledUp) _scrollToBottom();
+      });
+    }
 
     _sendContent(Content.text(text));
   }
@@ -240,13 +283,11 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
   void _sendContent(Content content) async {
     final streamId = _uuid.v4();
     _currentStreamId = streamId;
-    TextStreamMessage? streamMessage;
 
+    TextStreamMessage? streamMessage;
     var messageInserted = false;
 
-    setState(() {
-      _isStreaming = true;
-    });
+    setState(() => _isStreaming = true);
 
     Future<void> createAndInsertMessage() async {
       if (messageInserted || !mounted) return;
@@ -258,7 +299,15 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
         createdAt: DateTime.now().toUtc(),
         streamId: streamId,
       );
+
       await _chatController.insertMessage(streamMessage!);
+
+      if (_isAutoScrollEnabled && !_userScrolledUp) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!_userScrolledUp) _scrollToBottom();
+        });
+      }
+
       _streamManager.startStream(streamId, streamMessage!);
     }
 
@@ -267,29 +316,24 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
 
       _currentStreamSubscription = response.listen(
         (chunk) async {
-          if (chunk.text != null) {
-            final textChunk = chunk.text!;
-            if (textChunk.isEmpty) return;
+          if (chunk.text == null || chunk.text!.isEmpty) return;
 
-            if (!messageInserted) {
-              await createAndInsertMessage();
-            }
+          if (!messageInserted) await createAndInsertMessage();
+          if (streamMessage == null) return;
 
-            if (streamMessage == null) return;
+          _streamManager.addChunk(streamId, chunk.text!);
 
-            _streamManager.addChunk(streamId, textChunk);
+          if (_isAutoScrollEnabled && !_userScrolledUp) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!_userScrolledUp) _scrollToBottom();
+            });
           }
         },
         onDone: () async {
           if (streamMessage != null) {
             await _streamManager.completeStream(streamId);
           }
-
-          if (mounted) {
-            setState(() {
-              _isStreaming = false;
-            });
-          }
+          if (mounted) setState(() => _isStreaming = false);
           _currentStreamSubscription = null;
           _currentStreamId = null;
         },
@@ -306,12 +350,7 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
 class _Composer extends StatefulWidget {
   final bool isStreaming;
   final VoidCallback? onStop;
-
-  const _Composer({
-    this.isStreaming = false,
-    this.onStop,
-  });
-
+  const _Composer({this.isStreaming = false, this.onStop});
   @override
   State<_Composer> createState() => _ComposerState();
 }
@@ -320,7 +359,6 @@ class _ComposerState extends State<_Composer> {
   final _key = GlobalKey();
   late final TextEditingController _textController;
   late final FocusNode _focusNode;
-
   @override
   void initState() {
     super.initState();
@@ -365,7 +403,6 @@ class _ComposerState extends State<_Composer> {
         surfaceContainerLow: t.colors.surfaceContainerLow,
       ),
     );
-
     return Positioned(
       left: 0,
       right: 0,
@@ -377,8 +414,9 @@ class _ComposerState extends State<_Composer> {
           child: Column(
             children: [
               Padding(
-                padding: EdgeInsets.only(bottom: bottomSafeArea)
-                    .add(const EdgeInsets.all(8.0)),
+                padding: EdgeInsets.only(
+                  bottom: bottomSafeArea,
+                ).add(const EdgeInsets.all(8.0)),
                 child: Row(
                   children: [
                     if (onAttachmentTap != null)
@@ -400,12 +438,12 @@ class _ComposerState extends State<_Composer> {
                           ),
                           border: const OutlineInputBorder(
                             borderSide: BorderSide.none,
-                            borderRadius:
-                                BorderRadius.all(Radius.circular(24)),
+                            borderRadius: BorderRadius.all(Radius.circular(24)),
                           ),
                           filled: true,
-                          fillColor: theme.surfaceContainerHigh
-                              .withValues(alpha: 0.8),
+                          fillColor: theme.surfaceContainerHigh.withValues(
+                            alpha: 0.8,
+                          ),
                           hoverColor: Colors.transparent,
                         ),
                         style: theme.bodyMedium.copyWith(
@@ -443,7 +481,6 @@ class _ComposerState extends State<_Composer> {
 
   void _measure() {
     if (!mounted) return;
-
     final renderBox = _key.currentContext?.findRenderObject() as RenderBox?;
     if (renderBox != null) {
       final height = renderBox.size.height;
