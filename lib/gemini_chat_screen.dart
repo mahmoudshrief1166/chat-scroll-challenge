@@ -152,7 +152,7 @@ class _GeminiChatScreenState extends State<GeminiChatScreen> {
         child: Chat(
           builders: Builders(
             chatAnimatedListBuilder: (context, itemBuilder) {
-              return ChatAnimatedList(
+              return ChatAnimatedList( 
                 scrollController: _scrollController,
                 itemBuilder: itemBuilder,
                 // shouldScrollToEndWhenAtBottom: false,
