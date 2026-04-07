@@ -7,6 +7,15 @@
 3. Run `flutter run` (web, macOS, or any platform)
 4. Enter your API key and start chatting
 
+# Chat Auto-Scroll Challenge
+
+## Setup
+
+1. Get a free Gemini API key from [ai.google.dev](https://ai.google.dev)
+2. Run `flutter pub get`
+3. Run `flutter run` (web, macOS, or any platform)
+4. Enter your API key and start chatting
+
 🛠 Features
 💬 Flutter Chat UI
 Built using flutter_chat_ui and flyer_chat_* packages.
